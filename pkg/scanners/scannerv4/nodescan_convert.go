@@ -8,6 +8,7 @@ import (
 	v4 "github.com/stackrox/rox/generated/internalapi/scanner/v4"
 	"github.com/stackrox/rox/generated/storage"
 	"github.com/stackrox/rox/pkg/protocompat"
+	"github.com/stackrox/rox/pkg/scannerv4/scos"
 	"github.com/stackrox/rox/pkg/set"
 	"github.com/stackrox/rox/pkg/utils"
 )
@@ -25,13 +26,26 @@ func toNodeScan(r *v4.VulnerabilityReport, osImageRef string) *storage.NodeScan 
 	fixedNotes := fixNotes(toStorageNotes(r.GetNotes()), osImageRef)
 
 	convertedOS := toOperatingSystem(osImageRef)
+	components := toStorageComponents(r)
+	dist := r.GetContents().GetDistributions()[scos.DistributionID]
+	if dist.GetDid() == scos.DistributionID && strings.HasPrefix(osImageRef, scos.Name) {
+		// Component IDs include this field. Keep compatibility findings separate
+		// from RHCOS, other SCOS profiles and reports with no OS identity.
+		convertedOS = fmt.Sprintf("scos:%s:%s", dist.GetVersionId(), dist.GetArch())
+		for _, component := range components {
+			for _, vulnerability := range component.GetVulns() {
+				// RHEL advisories cannot establish an available SCOS fix.
+				vulnerability.SetFixedBy = nil
+			}
+		}
+	}
 	if convertedOS == "" {
 		log.Warnf("Could not determine operating system from OSimage ref %s", osImageRef)
 	}
 
 	return &storage.NodeScan{
 		ScanTime:        protocompat.TimestampNow(),
-		Components:      toStorageComponents(r),
+		Components:      components,
 		Notes:           fixedNotes,
 		ScannerVersion:  storage.NodeScan_SCANNER_V4,
 		OperatingSystem: convertedOS,
